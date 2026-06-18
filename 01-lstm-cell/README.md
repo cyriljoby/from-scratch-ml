@@ -9,7 +9,46 @@ A from-scratch PyTorch implementation of the Long Short-Term Memory cell
 Understanding the gate mechanics, forget, input, output, and the additive
 cell state update that solves the vanishing gradient problem, by implementing them.
 
-#Understanding LSTM StagesLong Short-Term Memory (LSTM) networks use a gating mechanism to regulate the flow of information, allowing the network to effectively maintain both long-term and short-term dependencies.1. The Forget GateThe forget gate decides how much of the long-term memory to keep. It looks at the previous hidden state (short-term memory) and the current input, applies weights, and passes them through a sigmoid function to produce a value between 0 and 1 for each element in the cell state.0 = Completely forget the information.1 = Completely keep the information.$$\text{Output Factor} = \sigma(W_f \cdot [h_{t-1}, x_t] + b_f)$$Key Output: > $\text{Long-Term Memory} = \text{Long-Term Memory} \times \% \text{ Long-Term to Remember}$2. The Input GateThe input gate decides what new information to store in the long-term memory. It consists of two parallel blocks:Right Block (Potential Long-Term Memory): Combines the short-term memory and current input, then passes them through a $\tanh$ activation function to create candidate values ($\tilde{C}_t$).Left Block (% Potential Memory to Remember): Runs a sigmoid layer to determine what percentage of that new potential memory should actually be added to the long-term memory.Key Output: > $\text{New Long-Term Memory} = (\text{Potential Long-Term Memory} \times \% \text{ Potential Memory to Remember}) + \text{Long-Term Memory (Post-Forget Gate)}$3. The Output GateThe output gate determines the new short-term memory (hidden state) that will be passed to the next cell and used for the current step's prediction.Right Block (Potential Short-Term Memory): The newly updated long-term memory is passed through a $\tanh$ function to scale the values between -1 and 1.Left Block (% Potential Memory to Remember): A sigmoid layer determines which parts of the potential short-term memory should actually be outputted.Key Output: > $\text{New Short-Term Memory} = \text{Potential Short-Term Memory} \times \% \text{ Potential Memory to Remember}$
+## Stages of an LSTM
+
+An LSTM uses a gating mechanism to regulate the flow of information, letting the
+network maintain both **long-term memory** (the cell state) and **short-term
+memory** (the hidden state). Each gate takes the previous short-term memory and
+the current input, applies weights, and uses sigmoid/tanh activations to decide
+what to keep, add, or expose.
+
+### 1. Forget Gate
+
+Decides **how much of the long-term memory to keep**. A sigmoid over the previous
+hidden state and current input produces a value between 0 and 1 for each element
+of the cell state (0 = forget completely, 1 = keep completely).
+
+> **Output:** `Long-Term Memory = Long-Term Memory × % Long-Term to Remember`
+
+### 2. Input Gate
+
+Decides **what new information to add** to the long-term memory, via two parallel
+blocks:
+
+- **Right block — Potential Long-Term Memory:** combines short-term memory and
+  input, then passes them through `tanh` to create the candidate (potential)
+  long-term memory.
+- **Left block — % Potential Memory to Remember:** a sigmoid that determines what
+  percentage of that potential memory to actually add.
+
+> **Output:** `New Long-Term Memory = (Potential Long-Term Memory × % Potential Memory to Remember) + Long-Term Memory`
+
+### 3. Output Gate
+
+Decides the **new short-term memory** (hidden state) passed to the next step,
+again via two blocks:
+
+- **Right block — Potential Short-Term Memory:** the new long-term memory is
+  passed through `tanh` to scale values between −1 and 1.
+- **Left block — % Potential Memory to Remember:** a sigmoid (same form as
+  above) selecting which parts to expose.
+
+> **Output:** `New Short-Term Memory = Potential Short-Term Memory × % Potential Memory to Remember`
 
 
 ## How It Works
