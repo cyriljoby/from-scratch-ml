@@ -23,4 +23,5 @@ NN-name/
 ```
 
 # Current Progress
+- Implemented LSTM cell with gradient flow visualization
 
