@@ -35,11 +35,13 @@ class LSTMCell(nn.Module):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.bias = bias
-
-        self.weight_ih = nn.Parameter(torch.empty(4 * hidden_size, input_size))
-        self.weight_hh = nn.Parameter(torch.empty(4 * hidden_size, hidden_size))
+        
+        # instead of creating 4 different matrices for the 4 gates, we can create one big matrix 
+        # and split it laterfor more efficient matrix multiplication.
+        self.weight_ih = nn.Parameter(torch.empty(4 * hidden_size, input_size)) # manipulates new input
+        self.weight_hh = nn.Parameter(torch.empty(4 * hidden_size, hidden_size)) #manipulates previous hidden state
         if bias:
-            self.bias_ih = nn.Parameter(torch.empty(4 * hidden_size))
+            self.bias_ih = nn.Parameter(torch.empty(4 * hidden_size)) # one bias for each gate
             self.bias_hh = nn.Parameter(torch.empty(4 * hidden_size))
         else:
             self.register_parameter("bias_ih", None)
@@ -71,11 +73,19 @@ class LSTMCell(nn.Module):
             h_prev, c_prev = zeros, zeros
         else:
             h_prev, c_prev = state
+        
 
-        # TODO(01-lstm-cell): implement the LSTM recurrence from scratch.
-        #   1. gates = x @ weight_ih.T (+ bias_ih) + h_prev @ weight_hh.T (+ bias_hh)
-        #   2. split gates into i, f, g, o along dim=1
-        #   3. i, f, o = sigmoid(...); g = tanh(...)
-        #   4. c_next = f * c_prev + i * g
-        #   5. h_next = o * tanh(c_next)
-        raise NotImplementedError("LSTMCell.forward not implemented yet")
+        gates = x @ self.weight_ih.T + h_prev @ self.weight_hh.T
+        if self.bias:
+            gates = gates + self.bias_ih + self.bias_hh
+        # This is an arbitrary convention: conceptually forget happens before input but we follow PyTorch conv
+        input_gate, forget , candidate, output = gates.chunk(4, dim=1)
+        input_gate = torch.sigmoid(input_gate)    # what percent of potential memory(candidate) to remember
+        forget = torch.sigmoid(forget)  # how much of c_prev to forget
+        output = torch.sigmoid(output)  # % potential short term memory to remember
+        candidate = torch.tanh(candidate)   # new potential long term memory
+        # compute the next cell state (Long Term Memory) and the next hidden state (Short Term Memory)
+        c_next = candidate * input_gate + forget * c_prev
+        potential_short_term = torch.tanh(c_next)
+        h_next = potential_short_term * output
+        return h_next, c_next

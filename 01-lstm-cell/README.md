@@ -4,76 +4,70 @@ A from-scratch PyTorch implementation of the Long Short-Term Memory cell
 (Hochreiter & Schmidhuber, 1997), built as a learning exercise before using
 `nn.LSTM` in the implementations of other NNs that follow.
 
+## Paper
+
+- **Title:** Long Short-Term Memory
+- **Authors:** Sepp Hochreiter, Jürgen Schmidhuber
+- **Year:** 1997 — Neural Computation 9(8): 1735–1780
+- **PDF:** https://www.bioinf.jku.at/publications/older/2604.pdf (predates arXiv)
+
 ## Why
 
-Understanding the gate mechanics, forget, input, output, and the additive
-cell state update that solves the vanishing gradient problem, by implementing them.
-
-## Stages of an LSTM
-
-An LSTM uses a gating mechanism to regulate the flow of information, letting the
-network maintain both **long-term memory** (the cell state) and **short-term
-memory** (the hidden state). Each gate takes the previous short-term memory and
-the current input, applies weights, and uses sigmoid/tanh activations to decide
-what to keep, add, or expose.
-
-### 1. Forget Gate
-
-Decides **how much of the long-term memory to keep**. A sigmoid over the previous
-hidden state and current input produces a value between 0 and 1 for each element
-of the cell state (0 = forget completely, 1 = keep completely).
-
-> **Output:** `Long-Term Memory = Long-Term Memory × % Long-Term to Remember`
-
-### 2. Input Gate
-
-Decides **what new information to add** to the long-term memory, via two parallel
-blocks:
-
-- **Right block — Potential Long-Term Memory:** combines short-term memory and
-  input, then passes them through `tanh` to create the candidate (potential)
-  long-term memory.
-- **Left block — % Potential Memory to Remember:** a sigmoid that determines what
-  percentage of that potential memory to actually add.
-
-> **Output:** `New Long-Term Memory = (Potential Long-Term Memory × % Potential Memory to Remember) + Long-Term Memory`
-
-### 3. Output Gate
-
-Decides the **new short-term memory** (hidden state) passed to the next step,
-again via two blocks:
-
-- **Right block — Potential Short-Term Memory:** the new long-term memory is
-  passed through `tanh` to scale values between −1 and 1.
-- **Left block — % Potential Memory to Remember:** a sigmoid (same form as
-  above) selecting which parts to expose.
-
-> **Output:** `New Short-Term Memory = Potential Short-Term Memory × % Potential Memory to Remember`
-
+To understand the gate mechanics — forget, input, output — and the additive
+cell-state update that *mitigates* the vanishing-gradient problem, by
+implementing them from scratch rather than reaching for `nn.LSTM`.
 
 ## How It Works
-
 The cell takes the current input and previous (hidden state, cell state), and
-produces updated versions of both through three gates:
+produces updated versions of both through three gates plus a **candidate**:
 
 - **Forget gate:** sigmoid over [h_prev, x] — determines how much of the
   existing cell state to keep
-- **Input gate:** sigmoid over [h_prev, x] scaled against a tanh candidate —
-  determines what new information to add to the cell state
+- **Input gate:** sigmoid over [h_prev, x] — what fraction of the candidate to write into the cell state
+- **Candidate:** tanh over [h_prev, x] — the potential new long-term memory (content, not a gate). The cell state is updated as `c = forget·c_prev + input·candidate`.
 - **Output gate:** sigmoid over [h_prev, x] scaled against tanh of the updated
   cell state — determines what to expose as the new hidden state
 
 The cell state itself is updated additively (old * forget + new * input),
-which gives gradients a direct path to flow backward through many time steps
-without vanishing.
+which gives gradients a direct path backward through many time steps — so they
+decay far more slowly than in a vanilla RNN (mitigated, not eliminated — see
+[Results](#results)).
 
-## Verification
+## Implementation notes
 
-The implementation is tested against PyTorch's `nn.LSTMCell` — given identical
-weights and inputs, outputs match within `atol=1e-5`.
+- **Hand-written:** the full gate computation and recurrence (`forward`). Only
+  `nn.Parameter` and tensor ops are used — no `nn.LSTM`, no `nn.LSTMCell`.
+- **Parameter layout:** weights and biases are stacked in the order `[i, f, g, o]`
+  to match `torch.nn.LSTMCell`, so the reference test can copy weights across and
+  compare exactly.
+- **Deliberately omitted:** peephole connections (so the gates read `[h_prev, x]`,
+  not the cell state), and any sequence / multi-layer wrapping — this is a single
+  *cell* (one timestep); the sequence loop belongs to later implementations.
+
+## Results
+
+**Reference match.** Given identical weights and inputs, the cell matches
+`torch.nn.LSTMCell` within `atol=1e-5`, with and without bias.
+
+**Gradient flow.** `gradient_flow.py` unrolls the cell over a 100-step sequence,
+computes a loss on the final hidden state, and records the gradient norm at every
+timestep — a direct demonstration of *why* the LSTM exists.
+
+![Gradient flow: LSTM vs vanilla RNN](assets/gradient_flow.png)
+
+*Gradient norm of the loss w.r.t. each timestep's hidden state (log scale). The
+vanilla RNN's gradient vanishes within ~25 steps; a standard LSTM (random init,
+forget gate ≈ 0.5) preserves it far longer; and an LSTM with the forget-gate bias
+raised so the gate ≈ 1 keeps the gradient nearly constant across all 100 steps —
+the "constant error carousel" the architecture was built around. All three share
+the same weight initialization (`Uniform(±1/√H)`) under a fixed seed; only the
+architecture and forget-gate bias differ.*
+
+## Running it
 
 ```bash
-pytest tests/test_lstm_cell.py
+pytest tests/              # 4 checks: shapes, default zero-state, nn.LSTMCell match (bias on/off)
+python gradient_flow.py    # regenerates assets/gradient_flow.png
 ```
 
 ## What's Next
