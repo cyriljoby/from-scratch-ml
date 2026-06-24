@@ -13,7 +13,7 @@ A from-scratch PyTorch implementation of the Long Short-Term Memory cell
 
 ## Why
 
-To understand the gate mechanics — forget, input, output — and the additive
+To understand the gate mechanics, forget, input, output, and the additive
 cell-state update that *mitigates* the vanishing-gradient problem, by
 implementing them from scratch rather than reaching for `nn.LSTM`.
 
@@ -25,8 +25,8 @@ produces updated versions of both through three gates plus a **candidate**:
   existing cell state to keep
 - **Input gate:** sigmoid over [h_prev, x] — what fraction of the candidate to write into the cell state
 - **Candidate:** tanh over [h_prev, x] — the potential new long-term memory (content, not a gate). The cell state is updated as `c = forget·c_prev + input·candidate`.
-- **Output gate:** sigmoid over [h_prev, x] scaled against tanh of the updated
-  cell state — determines what to expose as the new hidden state
+- **Output gate:** sigmoid over [h_prev, x] — determines what part of the
+  updated cell state to expose as the new hidden state: `h = output·tanh(c)`.
 
 The cell state itself is updated additively (old * forget + new * input),
 which gives gradients a direct path backward through many time steps — so they
@@ -55,12 +55,12 @@ timestep — a direct demonstration of *why* the LSTM exists.
 
 ![Gradient flow: LSTM vs vanilla RNN](assets/gradient_flow.png)
 
-*Gradient norm of the loss w.r.t. each timestep's hidden state (log scale). The
-vanilla RNN's gradient vanishes within ~25 steps; a standard LSTM (random init,
+*The vanilla RNN's gradient vanishes within ~25 steps; a standard LSTM (random init,
 forget gate ≈ 0.5) preserves it far longer; and an LSTM with the forget-gate bias
-raised so the gate ≈ 1 keeps the gradient nearly constant across all 100 steps —
-the "constant error carousel" the architecture was built around. All three share
-the same weight initialization (`Uniform(±1/√H)`) under a fixed seed; only the
+raised so the gate ≈ 1 keeps the gradient nearly constant across all 100 steps which is
+the initial architecture the LSTM was built around in 1997. Having the gate ≈ 1 makes it so that
+the cell state is completely maintained. The forget gate was added later by Gers et al. (2000) specifically to let the network learn to erase things it no longer needed
+All three share the same weight initialization (`Uniform(±1/√H)`) under a fixed seed; only the
 architecture and forget-gate bias differ.*
 
 ## Running it
