@@ -53,14 +53,14 @@ def test_overfit_one_batch() -> None:
     criterion = nn.CrossEntropyLoss(ignore_index=PAD_ID)
 
     loss = torch.tensor(float("inf"))
-    for _ in range(800):
-        optimizer.zero_grad()
+    for _ in range(600):
+        optimizer.zero_grad() #clear gradients from previous step
         outputs = model(src, tgt, teacher_forcing_ratio=1.0)  # (BATCH, SEQ_LEN, VOCAB)
-        predictions = outputs[:, 1:, :].reshape(-1, VOCAB)  # drop <sos> and flatten
-        targets = tgt[:, 1:].reshape(-1)  # drop <sos> and flatten
+        predictions = outputs[:, 1:, :].reshape(-1, outputs.size())  # drop <sos> and flatten into (BATCH * (SEQ_LEN-1), VOCAB)
+        targets = tgt[:, 1:].reshape(-1)  # drop <sos> and flatten into (BATCH * (SEQ_LEN-1),)
         loss = criterion(predictions, targets)  # compute the loss
-        loss.backward()
+        loss.backward() # compute gradients
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
-        optimizer.step()
+        optimizer.step() # apply gradients to update model parameters
 
     assert loss.item() < 0.01, f"failed to overfit: final loss {loss.item():.4f}"

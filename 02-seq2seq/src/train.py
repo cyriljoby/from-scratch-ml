@@ -10,11 +10,12 @@ import random
 from pathlib import Path
 
 import numpy as np
+import sacrebleu
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from constants import PAD_ID
+from constants import PAD_ID, SOS_ID, EOS_ID
 from data import read_parallel, tokenize, Vocab, Seq2SeqDataset, collate
 from model import Encoder, Decoder, Seq2Seq
 
@@ -48,7 +49,10 @@ def evaluate(model, loader, criterion, device) -> float:
     total_loss = 0.0
     for src, target in loader:
         src, target = src.to(device), target.to(device)
-        outputs = model(src, target, teacher_forcing_ratio=0.0)
+        # teacher forcing on: per-token loss given correct history — a clean,
+        # train-comparable generalization signal for early stopping. Real
+        # free-running quality is measured separately by BLEU.
+        outputs = model(src, target, teacher_forcing_ratio=1.0)
         predicted = outputs[:, 1:, :].reshape(-1, outputs.size(2))
         target = target[:, 1:].reshape(-1)
         loss = criterion(predicted, target)
