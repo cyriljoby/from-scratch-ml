@@ -56,7 +56,7 @@ def test_overfit_one_batch() -> None:
     for _ in range(600):
         optimizer.zero_grad() #clear gradients from previous step
         outputs = model(src, tgt, teacher_forcing_ratio=1.0)  # (BATCH, SEQ_LEN, VOCAB)
-        predictions = outputs[:, 1:, :].reshape(-1, outputs.size())  # drop <sos> and flatten into (BATCH * (SEQ_LEN-1), VOCAB)
+        predictions = outputs[:, 1:, :].reshape(-1, outputs.size(-1))  # drop <sos> and flatten into (BATCH * (SEQ_LEN-1), VOCAB)
         targets = tgt[:, 1:].reshape(-1)  # drop <sos> and flatten into (BATCH * (SEQ_LEN-1),)
         loss = criterion(predictions, targets)  # compute the loss
         loss.backward() # compute gradients
