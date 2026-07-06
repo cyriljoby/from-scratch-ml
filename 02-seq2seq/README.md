@@ -95,10 +95,121 @@ From the above training details it is clear that the same scale is impossible as
 - **Evaluation:** BLEU score on test set.
 
 ## My Results
-Coming Soon
+
+### Final training setup (as run)
+
+- **Batch size:** 64 — more efficient for repeated experiments than 32, with
+  minimal quality loss (val loss barely higher).
+- **Epochs:** 40 — also tested 50, but the last 10 epochs changed validation loss
+  negligibly, so 40 was significantly faster for repeated runs.
+- **Learning rate:** kept at Adam 3e-4 even after bumping batch 32→64; a larger
+  batch sometimes wants a higher LR, but Adam at 3e-4 stayed stable.
+- **Batching:** random shuffle with padding, *not* length-sorted as planned —
+  padding waste is small at batch 64, so I skipped the length-bucketing
+  optimization (it affects speed, not model quality).
+- **Device:** Apple MPS (Metal). Note LSTM kernels aren't bit-reproducible on MPS,
+  so BLEU wobbles ~1 point between otherwise-identical runs (see Caveats).
+
+### BLEU (test set, greedy decode, sacreBLEU)
+
+Methodology:
+- **Test set:** measured on `mmt16_task1_test` (1000 held-out sentences), never seen in training or validation.
+- **Greedy decode:** take the top token each step, no beam search implemented as of now (beam would likely score higher).
+- **sacreBLEU:** standard, reproducible corpus-level BLEU. References are the true target tokens (not round-tripped through the vocab, so no `<unk>` leaks into them).
+- **Controlled comparison:** same seed, batch size, learning rate, and epoch budget across all rows of a table — only the stated variable changes, so any BLEU difference is attributable to that variable.
+
+**Source reversal (train_tf = 1.0):**
+
+| Source order | best val loss | test BLEU |
+|---|---|---|
+| Reversed     | 2.4944 | 15.81 |
+| Not reversed | 2.4914 | 17.21 |
+
+**Teacher-forcing ratio:**
+
+| Train TF ratio | best val loss | test BLEU |
+|---|---|---|
+| 1.0 |  |  |
+| 0.5 |  |  |
+| 0.0 |  |  |
+
+### Did source reversal help?
+
+**No.** Reversal was marginally *worse* (15.81 vs 17.21 BLEU), not better — a
+failure to reproduce the paper's gain (25.9 → 30.6 on WMT'14) at this scale.
+
+I tested whether Multi30k's short sentences were masking a real benefit (reversal
+should help most on long sentences). Length-stratified BLEU says no:
+
+| src length | n | forward | reversed | Δ |
+|---|---|---|---|---|
+| 1–9   | 270 | 19.74 | 18.87 | −0.87 |
+| 10–12 | 323 | 19.24 | 18.00 | −1.23 |
+| 13–16 | 273 | 17.27 | 14.75 | −2.52 |
+| 17–35 | 134 | 12.24 | 11.99 | −0.24 |
+| all   | 1000 | 17.21 | 15.81 | −1.40 |
+
+Negative in every bucket, no positive trend with length. Likely Multi30k never
+reaches the long-sentence regime where reversal pays off (≤35 tokens vs WMT'14's
+much longer sentences). Caveat: single seed + MPS noise (~1 BLEU), so trust the
+direction, not the exact deltas.
 
 
- 
+### Did teacher-forcing ratio matter?
+<!-- your read: 1.0 vs 0.5 vs 0.0 -->
+
+
+### Comparison to the paper
+My best is 17.21 BLEU vs the paper's 30.6 (single reversed model). But, a direct comparison is not possible due to the following differences primarily due to scale and architectural differences.
+
+- Task: De→En vs their En→Fr
+- Data: 29k pairs vs ~12M (~400× less)
+- Model: 2×256 vs 4×1000
+- Decoding: greedy single model vs beam search + 5-model ensemble
+
+What's comparable is the *method*, with
+same encoder-decoder LSTM, same recipe scaled down and the gap is mostly
+explained by data and model size.
+
+
+### Measurement lesson: teacher forcing in eval
+<!-- what went wrong with TF=0 eval, why, how you fixed it -->
+
+
+### Debugging: Using the paper as a guide
+
+My first reversal runs showed source reversal *halving* BLEU (~5 reversed vs ~17
+not-reversed), which directly contradicted the paper's results where reversal improved the model.I used the
+paper's expected result as a guide to debug this clear bug.
+
+The other clue was internal: reversed and non-reversed models reached *nearly
+identical validation loss* (~2.49) but wildly different BLEU (5 vs 17). Since val
+loss (teacher-forced) was fine, the model wasn't broken, which meant something specific to
+*decoding/evaluation* of the reversed run was failing.
+
+I isolated it step by step:
+
+1. **Is reversal applied consistently?** Printed the tensors from both the
+   training `DataLoader` and the eval path which had byte-identical reversed input. This mean it
+   wasn't a train/eval reversal mismatch. 
+2. **Decoded  a reversed model in memory, both ways.** Trained
+   `reverse=True` and evaluated the *in-memory* model (no checkpoint file) with
+   reversed vs forward decoding: **10.97 matched vs 4.88 mismatched.** A reversed
+   model correctly prefers reversed decoding — so reversal was working all along.
+
+**Root cause:** a single shared `best_model.pth` written by every run. Because I
+ran the configs back-to-back, the reversed run's BLEU step loaded a *forward*
+model left on disk and decoded it reversed The fix was per-config checkpoint filenames
+(`best_r{reverse}_tf{tf}.pth`), so no run can ever evaluate another run's weights.
+
+### Sample translations
+```
+REF:
+HYP:
+```
+
+
+
 ## What's Next
  
 The encoder compresses the entire source sentence into a single fixed-size vector,

@@ -107,13 +107,17 @@ def compute_bleu(model, test_tokens, src_vocab, tgt_vocab, device, reverse: bool
         src, _ = collate(encoded, reverse=reverse)  # encode + pad + (maybe) reverse source
         pred = greedy_decode(model, src, device, max_len)
         hyps.extend(ids_to_text(row, tgt_vocab) for row in pred.tolist())
-    return sacrebleu.corpus_bleu(hyps, [refs]).score
+    # force=True: hyps/refs are already tokenized by our tokenizer, so we
+    # suppress sacreBLEU's "detokenize?" warning (effect is <1 BLEU here).
+    return sacrebleu.corpus_bleu(hyps, [refs], force=True).score
 
 
 def main() -> None:
     # Experiment config
-    REVERSE = False   # reverse the source sentence (paper's trick). A/B: True vs False
-    TRAIN_TF = 0.5   # teacher-forcing ratio during training. ablate: 1.0 / 0.5 / 0.0
+    REVERSE = True   # reverse the source sentence (paper's trick). A/B: True vs False
+    TRAIN_TF = 0.0  # teacher-forcing ratio during training. ablate: 1.0 / 0.5 / 0.0
+    # per-config checkpoint so runs never overwrite / BLEU each other's models
+    CKPT = f"best_r{int(REVERSE)}_tf{TRAIN_TF}.pth"
 
     seed_everything()
     data = Path(__file__).resolve().parents[2] / "data"
@@ -128,13 +132,13 @@ def main() -> None:
     print(f"vocab sizes — src(de): {len(src_vocab)}  tgt(en): {len(tgt_vocab)}")
     train_loader = DataLoader(
         Seq2SeqDataset(train_tokens, src_vocab, tgt_vocab),
-        batch_size=32,
+        batch_size=64,
         shuffle=True,
         collate_fn=lambda b: collate(b, reverse=REVERSE),
     )
     val_loader = DataLoader(
         Seq2SeqDataset(val_tokens, src_vocab, tgt_vocab),
-        batch_size=32,
+        batch_size=64,
         shuffle=False,
         collate_fn=lambda b: collate(b, reverse=REVERSE),
     )
@@ -148,7 +152,7 @@ def main() -> None:
     model = Seq2Seq(encoder, decoder).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
     criterion = nn.CrossEntropyLoss(ignore_index=PAD_ID)
-    MAX_EPOCHS = 50
+    MAX_EPOCHS = 40
     PATIENCE = 5
     best_val_loss = float("inf")
     epochs_without_improvement = 0
@@ -164,7 +168,7 @@ def main() -> None:
         if best:
             best_val_loss = val_loss
             epochs_without_improvement = 0
-            torch.save(model.state_dict(), "best_model.pth")
+            torch.save(model.state_dict(), CKPT)
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= PATIENCE:
@@ -172,7 +176,7 @@ def main() -> None:
                 break
 
     # test BLEU on the best checkpoint (greedy, free-running)
-    model.load_state_dict(torch.load("best_model.pth", map_location=device))
+    model.load_state_dict(torch.load(CKPT, map_location=device))
     test_pairs = read_parallel(data / "mmt16_task1_test" / "test.de", data / "mmt16_task1_test" / "test.en")
     test_tokens = tokenize(test_pairs)
     bleu = compute_bleu(model, test_tokens, src_vocab, tgt_vocab, device, reverse=REVERSE)
