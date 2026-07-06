@@ -125,13 +125,13 @@ Methodology:
 | Reversed     | 2.4944 | 15.81 |
 | Not reversed | 2.4914 | 17.21 |
 
-**Teacher-forcing ratio:**
+**Teacher-forcing ratio (reverse=True):**
 
 | Train TF ratio | best val loss | test BLEU |
 |---|---|---|
-| 1.0 |  |  |
-| 0.5 |  |  |
-| 0.0 |  |  |
+| 1.0 | 2.4944 | 15.81 |
+| 0.5 | 2.6438 | 17.20 |
+| 0.0 | 3.4463 | 11.96 |
 
 ### Did source reversal help?
 
@@ -156,7 +156,22 @@ direction, not the exact deltas.
 
 
 ### Did teacher-forcing ratio matter?
-<!-- your read: 1.0 vs 0.5 vs 0.0 -->
+
+As expected, the loss was minimized the most when teacher forcing was fully on
+(tf=1.0). This makes sense because it prevents the model from straying from the
+true value at each step. However, the interesting thing is that tf=0.5 achieved
+the best BLEU, which means it was best at actual translation. This implies a sweet
+spot: enough exposure to its own predictions to be robust at inference, while
+still having enough ground truth to keep training effective.
+
+The other end confirms it, tf=0.0 was worst on both val loss and BLEU (11.96).
+With no ground truth, early training feeds on its own garbage predictions, so it
+never learns well. So too little teacher forcing is as bad as too much.
+
+Worth noting: the tf=0.5 vs 1.0 gap (~1.4 BLEU) is close to the MPS noise floor,
+so I read it as "0.5 looks best / there's a sweet spot" rather than a hard number.
+The tf=0.0 drop is well beyond noise. It's also a nice echo of the eval lesson
+below: the lowest val loss (tf=1.0) did *not* give the best translations.
 
 
 ### Comparison to the paper
@@ -172,14 +187,22 @@ same encoder-decoder LSTM, same recipe scaled down and the gap is mostly
 explained by data and model size.
 
 
+
 ### Measurement lesson: teacher forcing in eval
-<!-- what went wrong with TF=0 eval, why, how you fixed it -->
+
+At first I evaluated with teacher forcing off (TF=0), and val loss looked like it
+was *rising* while train loss dropped — which looked like instant overfitting. It
+wasn't. Training used TF=1.0 (ground truth every step) but eval used TF=0.0
+(free-running), so the two weren't measuring the same thing: free-running
+compounds early mistakes and inflates the loss. I switched eval to TF=1.0 for a
+clean, train-comparable signal, and left real free-running quality to BLEU (which
+is TF-free by nature).
 
 
 ### Debugging: Using the paper as a guide
 
 My first reversal runs showed source reversal *halving* BLEU (~5 reversed vs ~17
-not-reversed), which directly contradicted the paper's results where reversal improved the model.I used the
+not-reversed), which directly contradicted the paper's results where reversal improved the model. I used the
 paper's expected result as a guide to debug this clear bug.
 
 The other clue was internal: reversed and non-reversed models reached *nearly
@@ -190,8 +213,8 @@ loss (teacher-forced) was fine, the model wasn't broken, which meant something s
 I isolated it step by step:
 
 1. **Is reversal applied consistently?** Printed the tensors from both the
-   training `DataLoader` and the eval path which had byte-identical reversed input. This mean it
-   wasn't a train/eval reversal mismatch. 
+   training `DataLoader` and the eval path which had byte-identical reversed input. This meant it
+   wasn't a train/eval reversal mismatch.
 2. **Decoded  a reversed model in memory, both ways.** Trained
    `reverse=True` and evaluated the *in-memory* model (no checkpoint file) with
    reversed vs forward decoding: **10.97 matched vs 4.88 mismatched.** A reversed
@@ -199,14 +222,39 @@ I isolated it step by step:
 
 **Root cause:** a single shared `best_model.pth` written by every run. Because I
 ran the configs back-to-back, the reversed run's BLEU step loaded a *forward*
-model left on disk and decoded it reversed The fix was per-config checkpoint filenames
+model left on disk and decoded it reversed. The fix was per-config checkpoint filenames
 (`best_r{reverse}_tf{tf}.pth`), so no run can ever evaluate another run's weights.
 
 ### Sample translations
+
+From the best model (not-reversed, BLEU 17.21), greedy decode. The model produces
+fluent English and captures sentence structure, but often gets specific content
+wrong — typical of a small greedy single-model system at this BLEU.
+
 ```
-REF:
-HYP:
+# near-correct
+DE : leute , die vor einem gebäude stehen .
+REF: people standing outside of a building .
+HYP: people standing outside in a building .
+
+# right theme, wrong details
+DE : ein junge in einem roten trikot versucht , die home base zu erreichen ...
+REF: a boy in a red uniform is attempting to avoid getting out at home plate ...
+HYP: a boy in a red uniform is trying to catch the ball while the other team ...
+
+# fluent but hallucinated
+DE : ein mann mit einem orangefarbenen hut , der etwas anstarrt .
+REF: a man in an orange hat starring at something .
+HYP: a man with a beard is working on his computer .
 ```
+
+### Caveats
+
+- **MPS nondeterminism:** LSTM kernels aren't reproducible on Apple GPU, so BLEU
+  shifts ~1 point between identical runs. I don't read into sub-1-point gaps.
+- **Tokenization:** hyps/refs are pre-tokenized by my tokenizer and passed to
+  sacreBLEU with `force=True`. Effect is <1 BLEU vs `tokenize='none'`, but the
+  number isn't directly comparable to papers reporting detokenized sacreBLEU.
 
 
 

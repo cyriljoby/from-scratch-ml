@@ -114,8 +114,8 @@ def compute_bleu(model, test_tokens, src_vocab, tgt_vocab, device, reverse: bool
 
 def main() -> None:
     # Experiment config
-    REVERSE = True   # reverse the source sentence (paper's trick). A/B: True vs False
-    TRAIN_TF = 0.0  # teacher-forcing ratio during training. ablate: 1.0 / 0.5 / 0.0
+    REVERSE = False   # reverse the source sentence (paper's trick). A/B: True vs False
+    TRAIN_TF = 0.5  # teacher-forcing ratio during training. ablate: 1.0 / 0.5 / 0.0
     # per-config checkpoint so runs never overwrite / BLEU each other's models
     CKPT = f"best_r{int(REVERSE)}_tf{TRAIN_TF}.pth"
 
