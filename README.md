@@ -24,4 +24,5 @@ NN-name/
 
 # Current Progress
 - Implemented LSTM cell with gradient flow visualization
+- Implemented Seq2Se2 model on Multi30K to enable German->English
 
