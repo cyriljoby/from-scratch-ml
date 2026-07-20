@@ -56,3 +56,23 @@
 - RNNsearch-50* nearly matches Moses on No UNK sentences (36.15 vs 35.63), which is the headline result
 - The No UNK column is higher across the board because unknown words are a known failure mode and removing them isolates translation quality itself
 
+## Architecture (this implementation)
+<!-- What was implemented vs what was deliberately omitted/changed, and why -->
+- **Implemented:** _TODO — e.g. BiRNN (GRU/LSTM?) encoder, additive (Bahdanau) attention, decoder with per-step context vector_
+- **Omitted / changed:** _TODO — e.g. no maxout output layer, single layer instead of paper's depth, and why_
+- **Model sizes:** _TODO — embedding dim, hidden dim, vocab size_
+
+## Training details
+- **Dataset:** _TODO — dataset name, size, source/target languages, tokenization_
+- **Hyperparameters:** _TODO — batch size, epochs, learning rate, teacher forcing ratio_
+- **Optimizer:** _TODO — paper used SGD + Adadelta; what was used here and why if different_
+- **Differences from paper:** _TODO_
+
+## Results (this implementation)
+- **Overfit-one-batch:** _TODO — loss reached, confirming the model can learn_
+- **Metrics:** _TODO — val loss / BLEU, compared against the paper's numbers, with honest explanation of any gap_
+- **Attention visualization:** _TODO — alignment heatmap on a sample sentence (the paper's Fig. 3 equivalent)_
+
+## Key takeaways
+- _TODO — what this motivates in the next paper (04-transformer: if attention does the heavy lifting, do we need the RNN at all?)_
+
