@@ -50,34 +50,17 @@ class Attention(nn.Module):
         self, decoder_hidden: Tensor, annotations: Tensor, mask: Tensor
     ) -> tuple[Tensor, Tensor]:
         """Score every source position against the decoder state.
-
-        Args:
-            decoder_hidden: (batch, hidden_dim) — s_{i-1}, the state BEFORE
-                this decoding step.
-            annotations: (batch, src_len, annotation_dim) — encoder's h_j.
-            mask: (batch, src_len) bool — True at real tokens, False at <pad>.
-
-        Returns:
-            context: (batch, annotation_dim) — c_i = Σ_j α_ij h_j.
-            weights: (batch, src_len) — α_ij; each row sums to 1, exactly 0
-                at padded positions.
         """
         #e_ij = v · tanh(W_s s_{i-1} + W_h h_j)
         # one decoder hidden state per batch, broadcast over src_len to score all annotations at once
         e = self.v(torch.tanh(self.W_s(decoder_hidden).unsqueeze(1) + self.W_h(annotations))).squeeze(-1)  # (batch, src_len, 1) -> (batch, src_len)
         e = e.masked_fill(~mask, float("-inf"))  # -inf at padded positions so softmax gives 0 weight there
-        weights = torch.softmax(e, dim=1) 
+        weights = torch.softmax(e, dim=1)
         context = (weights.unsqueeze(1) @ annotations).squeeze(1)
-        return weights, context
-
+        return context, weights
 
 class Encoder(nn.Module):
     """Bidirectional LSTM encoder producing one annotation per source token.
-
-    Unlike 02, the decoder needs the ENTIRE output sequence (the annotations),
-    plus an initial state of its own size: the BiLSTM's final states are
-    (2, batch, hidden_dim) — one per direction — so they get concatenated and
-    projected down to the decoder's (1, batch, hidden_dim).
     """
 
     def __init__(
@@ -89,11 +72,11 @@ class Encoder(nn.Module):
     ) -> None:
         super().__init__()
         self.hidden_dim = hidden_dim
-        # TODO: embedding (padding_idx=PAD_ID), dropout, bidirectional LSTM
-        #       (batch_first=True), and projections from the concatenated
-        #       forward+backward final state (2*hidden_dim) down to hidden_dim
-        #       for the decoder's initial hidden and cell.
-        raise NotImplementedError
+        self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=PAD_ID)
+        self.dropout = nn.Dropout(dropout)
+        self.rnn = nn.LSTM(embed_dim, hidden_dim, num_layers=1, bidirectional=True, batch_first=True)
+        self.fc_cell = nn.Linear(2*hidden_dim, hidden_dim)
+        self.fc_hidden = nn.Linear(2*hidden_dim, hidden_dim)
 
     def forward(self, src: Tensor) -> tuple[Tensor, Tensor, Tensor]:
         """Encode a batch of source sentences.
@@ -107,10 +90,17 @@ class Encoder(nn.Module):
             hidden: (1, batch, hidden_dim) — decoder's initial hidden state.
             cell:   (1, batch, hidden_dim) — decoder's initial cell state.
         """
-        # TODO: embed + dropout, run the BiLSTM, then build the decoder's
-        #       initial (hidden, cell) from the final directional states.
-        raise NotImplementedError
-
+        embedded = self.dropout(self.embedding(src)) # (batch, seq_len) -> (batch, seq_len, embed_dim)
+        o, (h, c) = self.rnn(embedded) # (batch, seq_len, 2*hidden_dim), (num_layer * num_directions, batch, hidden_dim), (num_layer * num_directions, batch, hidden_dim)
+        # combines forward, backward states into one continuous row
+        h = torch.cat([h[0], h[1]], dim = 1) # (2, batch, hidden_dim) -> (batch, 2*hidden_dim)
+        c = torch.cat([c[0], c[1]], dim = 1)
+        # project the bidirectional summary down to decoder size, then add back the
+        # (num_layers,) axis the decoder's LSTM expects on its state
+        hidden = self.fc_hidden(h).unsqueeze(0) # (batch, 2*hidden_dim) -> (1, batch, hidden_dim)
+        cell = self.fc_cell(c).unsqueeze(0)
+        # o is the annotations: every position's hidden state, both directions — what attention scores against
+        return o, hidden, cell
 
 class Decoder(nn.Module):
     """One-step LSTM decoder that attends over the annotations each step.
@@ -133,10 +123,14 @@ class Decoder(nn.Module):
         super().__init__()
         self.vocab_size = vocab_size
         self.hidden_dim = hidden_dim
-        # TODO: embedding, dropout, Attention, single-layer LSTM with input
-        #       size embed_dim + annotation_dim (batch_first=True), and fc_out
-        #       from hidden_dim + annotation_dim to vocab_size.
-        raise NotImplementedError
+        self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=PAD_ID)
+        self.dropout = nn.Dropout(dropout)
+        self.attention = Attention(hidden_dim, annotation_dim, attn_dim)
+        # input is [embedded token; context] so the LSTM sees both what came before
+        # and what the source says is relevant right now
+        self.rnn = nn.LSTM(embed_dim + annotation_dim, hidden_dim, num_layers=1, batch_first=True)
+        # logits come from [new hidden state; context] rather than hidden alone
+        self.fc_out = nn.Linear(hidden_dim + annotation_dim, vocab_size)
 
     def forward(
         self,
@@ -161,10 +155,16 @@ class Decoder(nn.Module):
             cell:   (1, batch, hidden_dim) updated cell.
             attn_weights: (batch, src_len) — α_ij for this step (for heatmaps).
         """
-        # TODO: 1. attend: context, weights = attention(hidden.squeeze(0), ...)
-        #       2. embed token, concat with context, run one LSTM step
-        #       3. logits from [new hidden; context]
-        raise NotImplementedError
+        # 1. attend BEFORE updating state: s_{i-1} asks "what's relevant now?"
+        #    hidden is (1, batch, hidden_dim) but attention wants (batch, hidden_dim)
+        context, attn_weights = self.attention(hidden.squeeze(0), annotations, mask) # (batch, annotation_dim), (batch, src_len)
+        # 2. one LSTM step over [embedded token; context]
+        embedded = self.dropout(self.embedding(input_token.unsqueeze(1))) # (batch,) -> (batch, 1) -> (batch, 1, embed_dim)
+        lstm_input = torch.cat([embedded, context.unsqueeze(1)], dim=2) # (batch, 1, embed_dim + annotation_dim)
+        o, (hidden, cell) = self.rnn(lstm_input, (hidden, cell)) # (batch, 1, hidden_dim), (1, batch, hidden_dim), (1, batch, hidden_dim)
+        # 3. predict from [new hidden state; context]
+        logits = self.fc_out(torch.cat([o.squeeze(1), context], dim=1)) # (batch, hidden_dim + annotation_dim) -> (batch, vocab_size)
+        return logits, hidden, cell, attn_weights
 
 
 class Seq2Seq(nn.Module):
@@ -184,6 +184,16 @@ class Seq2Seq(nn.Module):
         New vs 02: build mask = (src != PAD_ID) once, encode once, and pass
         (annotations, mask) into every decoder step.
         """
-        # TODO: mirror 02's loop — encode, start from tgt[:, 0], step through
-        #       time, choose teacher forcing per step via random.random().
-        raise NotImplementedError
+        batch, seq_len = tgt.size()
+        outputs = torch.zeros(batch, seq_len, self.decoder.vocab_size, device=src.device)
+        # encode once; annotations and mask are reused unchanged by every decoder step
+        mask = src != PAD_ID # (batch, src_len) bool, False at <pad> so attention can't look there
+        annotations, hidden, cell = self.encoder(src)
+        input_token = tgt[:, 0]  # first token is always <sos>. column 0 all rows
+        for time_step in range(1, seq_len):
+            logits, hidden, cell, _ = self.decoder(input_token, hidden, cell, annotations, mask)
+            outputs[:, time_step] = logits
+            # next input: ground truth (teacher forcing) or the model's own top prediction
+            teacher_force = random.random() < teacher_forcing_ratio
+            input_token = tgt[:, time_step] if teacher_force else logits.argmax(1)
+        return outputs
